@@ -1460,5 +1460,7 @@
   "1459": "[Server HMR] unreachable: unknown HMR instruction type %s",
   "1460": "[Server HMR] unreachable: unexpected update instruction type %s",
   "1461": "Invariant: no direct app page entry found for %s",
-  "1462": "Invariant: dev virtual filesystem item was not handled by the development bundler"
+  "1462": "Invariant: dev virtual filesystem item was not handled by the development bundler",
+  "1463": "Invariant: dev server state can only be updated in dev",
+  "1464": "Invariant: no app initialized"
 }
