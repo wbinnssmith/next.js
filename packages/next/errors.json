@@ -1458,5 +1458,6 @@
   "1457": "Expected prerender classification data for PPR route \"%s\"",
   "1458": "Expected complete prerender classification for route \"%s\"",
   "1459": "[Server HMR] unreachable: unknown HMR instruction type %s",
-  "1460": "[Server HMR] unreachable: unexpected update instruction type %s"
+  "1460": "[Server HMR] unreachable: unexpected update instruction type %s",
+  "1461": "Invariant: no direct app page entry found for %s"
 }
