@@ -361,6 +361,7 @@ async function startWatcher(
         isApp: item.type === 'appFile',
         definition,
         url: item.requestPath,
+        rscOnly: item.rscOnly,
       })
     }
   })
