@@ -10,12 +10,16 @@ describe('on-request-error - skip-next-internal-error', () => {
     return
   }
 
-  async function assertNoNextjsInternalErrors() {
-    const output = next.cliOutput
+  async function assertNoNextjsInternalErrors(outputIndex = 0) {
+    const output = next.cliOutput.slice(outputIndex)
+    expect(output.includes('[instrumentation]:error')).toBe(false)
     // No navigation errors
     expect(output).not.toContain('NEXT_REDIRECT')
     expect(output).not.toContain('NEXT_NOT_FOUND')
     expect(output).not.toContain('BAILOUT_TO_CLIENT_SIDE_RENDERING')
+    expect(
+      output.includes('Bail out to client-side rendering: browserOnly()')
+    ).toBe(false)
     // No dynamic usage errors
     expect(output).not.toContain('DYNAMIC_SERVER_USAGE')
     // No react postpone errors
@@ -61,6 +65,15 @@ describe('on-request-error - skip-next-internal-error', () => {
     it('should not catch next dynamic no-ssr errors', async () => {
       await next.fetch('/client/no-ssr')
       await assertNoNextjsInternalErrors()
+    })
+
+    it('should not catch browserOnly CSR bailout errors', async () => {
+      const outputIndex = next.cliOutput.length
+      const response = await next.fetch('/client/browser-only')
+
+      expect(response.status).toBe(200)
+      expect((await response.text()).includes('browser fallback')).toBe(true)
+      await assertNoNextjsInternalErrors(outputIndex)
     })
 
     // Server Actions navigation
