@@ -102,11 +102,42 @@ function shouldSkipElement(element: HTMLElement) {
 }
 
 /**
- * Check if the top corner of the HTMLElement is in the viewport.
+ * Resolve the root scroll padding used by the viewport check.
+ *
+ * Computed lengths serialize as pixels, but percentages remain relative to
+ * the scrollport. Preserve the existing behavior for values that still
+ * contain unresolved CSS math. This is resolved separately from the viewport
+ * check so it is only read once even when the check runs twice.
+ */
+function getScrollPaddingTopInPixels(
+  htmlElement: HTMLElement,
+  viewportHeight: number
+): number {
+  const scrollPaddingTop = getComputedStyle(htmlElement).scrollPaddingTop
+  const value = Number.parseFloat(scrollPaddingTop)
+
+  if (!Number.isFinite(value) || value < 0) {
+    return 0
+  }
+
+  if (scrollPaddingTop.endsWith('px')) {
+    return value
+  }
+
+  if (scrollPaddingTop.endsWith('%')) {
+    return (value / 100) * viewportHeight
+  }
+
+  return 0
+}
+
+/**
+ * Check if the top corner of the HTMLElement is in the usable viewport.
  */
 function topOfElementInViewport(
   instance: HTMLElement | FragmentInstance,
-  viewportHeight: number
+  viewportHeight: number,
+  scrollPaddingTop: number
 ): boolean {
   const rects = instance.getClientRects()
   if (rects.length === 0) {
@@ -120,7 +151,7 @@ function topOfElementInViewport(
       elementTop = rect.top
     }
   }
-  return elementTop >= 0 && elementTop <= viewportHeight
+  return elementTop >= scrollPaddingTop && elementTop <= viewportHeight
 }
 
 /**
@@ -210,9 +241,14 @@ class InnerScrollAndFocusHandlerOld extends React.Component<ScrollAndMaybeFocusH
         // and it won't change during this function.
         const htmlElement = document.documentElement
         const viewportHeight = htmlElement.clientHeight
+        // Let the browser reuse the style and layout update from clientHeight.
+        const scrollPaddingTop = getScrollPaddingTopInPixels(
+          htmlElement,
+          viewportHeight
+        )
 
         // If the element's top edge is already in the viewport, exit early.
-        if (topOfElementInViewport(domNode, viewportHeight)) {
+        if (topOfElementInViewport(domNode, viewportHeight, scrollPaddingTop)) {
           return
         }
 
@@ -223,7 +259,9 @@ class InnerScrollAndFocusHandlerOld extends React.Component<ScrollAndMaybeFocusH
         htmlElement.scrollTop = 0
 
         // Scroll to domNode if domNode is not in viewport when scrolled to top of document
-        if (!topOfElementInViewport(domNode, viewportHeight)) {
+        if (
+          !topOfElementInViewport(domNode, viewportHeight, scrollPaddingTop)
+        ) {
           // Scroll into view doesn't scroll horizontally by default when not needed
           domNode.scrollIntoView()
         }
@@ -319,9 +357,16 @@ function InnerScrollHandlerNew(props: ScrollAndMaybeFocusHandlerProps) {
           // and it won't change during this function.
           const htmlElement = document.documentElement
           const viewportHeight = htmlElement.clientHeight
+          // Let the browser reuse the style and layout update from clientHeight.
+          const scrollPaddingTop = getScrollPaddingTopInPixels(
+            htmlElement,
+            viewportHeight
+          )
 
           // If the element's top edge is already in the viewport, exit early.
-          if (topOfElementInViewport(instance, viewportHeight)) {
+          if (
+            topOfElementInViewport(instance, viewportHeight, scrollPaddingTop)
+          ) {
             return
           }
 
@@ -332,7 +377,9 @@ function InnerScrollHandlerNew(props: ScrollAndMaybeFocusHandlerProps) {
           htmlElement.scrollTop = 0
 
           // Scroll to domNode if domNode is not in viewport when scrolled to top of document
-          if (!topOfElementInViewport(instance, viewportHeight)) {
+          if (
+            !topOfElementInViewport(instance, viewportHeight, scrollPaddingTop)
+          ) {
             // Scroll into view doesn't scroll horizontally by default when not needed
             instance.scrollIntoView()
           }
