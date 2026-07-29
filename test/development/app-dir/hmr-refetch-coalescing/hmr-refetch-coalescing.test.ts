@@ -1,3 +1,5 @@
+import { writeFile } from 'node:fs/promises'
+import { join } from 'node:path'
 import { nextTestSetup } from 'e2e-utils'
 import { retry, waitFor } from 'next-test-utils'
 
@@ -95,5 +97,43 @@ describe('hmr-refetch-coalescing', () => {
     expect(refetches.count).toBe(1)
 
     await browser.close()
+  })
+
+  it('renders the final state after a burst of edits', async () => {
+    const browser = await next.browser('/burst')
+
+    try {
+      expect(await browser.elementByCss('#revision').text()).toBe(
+        '0-0|0-1|0-2|0-3|0-4|0-5|0-6|0-7'
+      )
+
+      // Agent edits write files one after another, often slowly enough to produce
+      // a separate filesystem event and compilation for every file.
+      for (let index = 0; index < 8; index++) {
+        await writeFile(
+          join(next.testDir, `app/shared/value-${index}.js`),
+          `export default '1-${index}'\n`,
+          { flush: true }
+        )
+        await waitFor(50)
+      }
+
+      await retry(async () => {
+        expect(await browser.elementByCss('#revision').text()).toBe(
+          '1-0|1-1|1-2|1-3|1-4|1-5|1-6|1-7'
+        )
+      }, 15_000)
+    } finally {
+      await browser.close()
+      await Promise.all(
+        Array.from({ length: 8 }, (_, index) =>
+          writeFile(
+            join(next.testDir, `app/shared/value-${index}.js`),
+            `export default '0-${index}'\n`,
+            { flush: true }
+          )
+        )
+      )
+    }
   })
 })

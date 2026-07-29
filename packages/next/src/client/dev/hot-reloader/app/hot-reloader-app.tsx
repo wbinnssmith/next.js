@@ -31,6 +31,7 @@ import type { McpPageMetadataResponse } from '../../../../shared/lib/mcp-page-me
 import { useUntrackedPathname } from '../../../components/navigation-untracked'
 import reportHmrLatency from '../../report-hmr-latency'
 import { TurbopackHmr } from '../turbopack-hot-reloader-common'
+import { TurbopackServerComponentRefreshScheduler } from '../turbopack-server-component-refresh-scheduler'
 import {
   publicAppRouterInstance,
   type GlobalErrorState,
@@ -64,6 +65,10 @@ let reloading = false
 let webpackStartMsSinceEpoch: number | null = null
 const turbopackHmr: TurbopackHmr | null = process.env.TURBOPACK
   ? new TurbopackHmr()
+  : null
+
+const turbopackServerComponentRefreshScheduler = process.env.TURBOPACK
+  ? new TurbopackServerComponentRefreshScheduler()
   : null
 
 let pendingHotUpdateWebpack = Promise.resolve()
@@ -227,6 +232,10 @@ export function processMessage(
   staticIndicatorState: StaticIndicatorState
 ) {
   function handleErrors(errors: ReadonlyArray<unknown>) {
+    // A deferred RSC refetch would fail against an errored compilation and
+    // trigger a full-page navigation. Resume it after the next successful build.
+    turbopackServerComponentRefreshScheduler?.onBuildError()
+
     // "Massage" webpack messages.
     const formatted = formatWebpackMessages({
       errors: errors,
@@ -265,6 +274,7 @@ export function processMessage(
         )
       }
       dispatcher.onBuildOk()
+      turbopackServerComponentRefreshScheduler?.onBuildOk()
     } else {
       tryApplyUpdatesWebpack(sendMessage)
     }
@@ -294,6 +304,7 @@ export function processMessage(
       dispatcher.buildingIndicatorShow()
 
       if (process.env.TURBOPACK) {
+        turbopackServerComponentRefreshScheduler?.onBuilding()
         turbopackHmr!.onBuilding()
       } else {
         webpackStartMsSinceEpoch = Date.now()
@@ -407,32 +418,46 @@ export function processMessage(
     // TODO-APP: make server component change more granular
     case HMR_MESSAGE_SENT_TO_BROWSER.SERVER_COMPONENT_CHANGES: {
       turbopackHmr?.onServerComponentChanges()
-      sendMessage(
-        JSON.stringify({
-          event: 'server-component-reload-page',
-          clientId: __nextDevClientId,
-        })
-      )
 
-      if (
-        RuntimeErrorHandler.hadRuntimeError ||
-        document.documentElement.id === '__next_error__'
-      ) {
+      const refreshServerComponents = () => {
+        // A trailing refresh can outlive the message that started a full reload.
         if (reloading) return
-        reloading = true
-        return window.location.reload()
+
+        sendMessage(
+          JSON.stringify({
+            event: 'server-component-reload-page',
+            clientId: __nextDevClientId,
+          })
+        )
+
+        if (
+          RuntimeErrorHandler.hadRuntimeError ||
+          document.documentElement.id === '__next_error__'
+        ) {
+          reloading = true
+          window.location.reload()
+          return
+        }
+
+        startTransition(() => {
+          publicAppRouterInstance.hmrRefresh()
+          dispatcher.onRefresh()
+        })
+
+        if (process.env.__NEXT_TEST_MODE) {
+          if (self.__NEXT_HMR_CB) {
+            self.__NEXT_HMR_CB()
+            self.__NEXT_HMR_CB = null
+          }
+        }
       }
 
-      startTransition(() => {
-        publicAppRouterInstance.hmrRefresh()
-        dispatcher.onRefresh()
-      })
-
-      if (process.env.__NEXT_TEST_MODE) {
-        if (self.__NEXT_HMR_CB) {
-          self.__NEXT_HMR_CB()
-          self.__NEXT_HMR_CB = null
-        }
+      if (process.env.TURBOPACK) {
+        turbopackServerComponentRefreshScheduler!.schedule(
+          refreshServerComponents
+        )
+      } else {
+        refreshServerComponents()
       }
 
       return
