@@ -36,7 +36,7 @@ enum CurrentChunkMethodWithData {
     DocumentCurrentScript,
 }
 
-/// Contents of an [`EcmascriptDevChunkList`].
+/// Contents of an `EcmascriptDevChunkList`.
 #[turbo_tasks::value]
 pub struct EcmascriptDevChunkListContent {
     current_chunk_method: CurrentChunkMethodWithData,

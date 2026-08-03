@@ -1,44 +1,44 @@
-use std::sync::Arc;
-
 use anyhow::Result;
 use serde::Serialize;
-use turbo_tasks::{FxIndexMap, ResolvedVc, TraitRef, Vc};
-use turbopack_core::version::{
-    MergeableVersionedContent, PartialUpdate, TotalUpdate, Update, Version, VersionedContent,
-    VersionedContentMerger,
+use turbo_tasks::{FxIndexMap, NonLocalValue, ResolvedVc, TraitRef, Vc, trace::TraceRawVcs};
+use turbopack_core::{
+    update_instruction::UpdateInstructionValue,
+    version::{
+        MergeableVersionedContent, PartialUpdate, TotalUpdate, Update, Version, VersionedContent,
+        VersionedContentMerger,
+    },
 };
 
-use super::version::ChunkListVersion;
+use super::{merged_update::EcmascriptMergedUpdate, version::ChunkListVersion};
 
 /// Update of a chunk list from one version to another.
-#[derive(Serialize)]
-#[serde(tag = "type")]
-#[serde(rename_all = "camelCase")]
-struct ChunkListUpdate<'a> {
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, TraceRawVcs, NonLocalValue)]
+#[serde(tag = "type", rename = "ChunkListUpdate", rename_all = "camelCase")]
+pub struct ChunkListUpdate {
     /// A map from chunk path to a corresponding update of that chunk.
     #[serde(skip_serializing_if = "FxIndexMap::is_empty")]
-    chunks: FxIndexMap<&'a str, ChunkUpdate>,
+    pub chunks: FxIndexMap<String, ChunkUpdate>,
     /// List of merged updates since the last version.
     #[serde(skip_serializing_if = "Vec::is_empty")]
-    merged: Vec<Arc<serde_json::Value>>,
+    pub merged: Vec<EcmascriptMergedUpdate>,
 }
 
 /// Update of a chunk from one version to another.
-#[derive(Serialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, TraceRawVcs, NonLocalValue)]
 #[serde(tag = "type")]
 #[serde(rename_all = "camelCase")]
-enum ChunkUpdate {
+pub enum ChunkUpdate {
     /// The chunk was updated and must be reloaded.
     Total,
     /// The chunk was updated and can be merged with the previous version.
-    Partial { instruction: Arc<serde_json::Value> },
+    Partial { instruction: UpdateInstructionValue },
     /// The chunk was added.
     Added,
     /// The chunk was deleted.
     Deleted,
 }
 
-impl ChunkListUpdate<'_> {
+impl ChunkListUpdate {
     /// Returns `true` if this update is empty.
     fn is_empty(&self) -> bool {
         let ChunkListUpdate { chunks, merged } = self;
@@ -105,11 +105,11 @@ pub async fn update_chunk_list(
 
             match &*chunk_update {
                 Update::Total(_) => {
-                    chunks.insert(chunk_path.as_ref(), ChunkUpdate::Total);
+                    chunks.insert(chunk_path.clone(), ChunkUpdate::Total);
                 }
                 Update::Partial(partial) => {
                     chunks.insert(
-                        chunk_path.as_ref(),
+                        chunk_path.clone(),
                         ChunkUpdate::Partial {
                             instruction: partial.instruction.clone(),
                         },
@@ -118,12 +118,12 @@ pub async fn update_chunk_list(
                 Update::Missing | Update::None => {}
             }
         } else {
-            chunks.insert(chunk_path.as_ref(), ChunkUpdate::Deleted);
+            chunks.insert(chunk_path.clone(), ChunkUpdate::Deleted);
         }
     }
 
     for chunk_path in by_path.keys() {
-        chunks.insert(chunk_path.as_ref(), ChunkUpdate::Added);
+        chunks.insert((*chunk_path).clone(), ChunkUpdate::Added);
     }
 
     let mut merged = vec![];
@@ -147,7 +147,17 @@ pub async fn update_chunk_list(
                     .cell());
                 }
                 Update::Partial(partial) => {
-                    merged.push(partial.instruction.clone());
+                    let Some(instruction) =
+                        partial.instruction.downcast_ref::<EcmascriptMergedUpdate>()
+                    else {
+                        return Ok(Update::Total(TotalUpdate {
+                            to: Vc::upcast::<Box<dyn Version>>(to_version)
+                                .into_trait_ref()
+                                .await?,
+                        })
+                        .cell());
+                    };
+                    merged.push(instruction.clone());
                 }
                 Update::Missing | Update::None => {}
             }
@@ -162,9 +172,49 @@ pub async fn update_chunk_list(
             to: Vc::upcast::<Box<dyn Version>>(to_version)
                 .into_trait_ref()
                 .await?,
-            instruction: Arc::new(serde_json::to_value(&update)?),
+            instruction: UpdateInstructionValue::new(update),
         })
     };
 
     Ok(update.cell())
+}
+
+#[cfg(test)]
+mod tests {
+    use serde_json::json;
+    use turbo_frozenmap::{FrozenMap, FrozenSet};
+    use turbo_tasks::FxIndexMap;
+
+    use super::{ChunkListUpdate, ChunkUpdate};
+    use crate::chunk_list::merged_update::{
+        EcmascriptMergedChunkAdded, EcmascriptMergedChunkUpdate, EcmascriptMergedUpdate,
+    };
+
+    #[test]
+    fn instruction_wire_format() {
+        let instruction = ChunkListUpdate {
+            chunks: FxIndexMap::from_iter([("app.js".to_owned(), ChunkUpdate::Total)]),
+            merged: vec![EcmascriptMergedUpdate {
+                entries: FrozenMap::default(),
+                chunks: FrozenMap::from_iter([(
+                    "app.js".to_owned(),
+                    EcmascriptMergedChunkUpdate::Added(EcmascriptMergedChunkAdded {
+                        modules: FrozenSet::default(),
+                    }),
+                )]),
+            }],
+        };
+
+        assert_eq!(
+            serde_json::to_value(instruction).unwrap(),
+            json!({
+                "type": "ChunkListUpdate",
+                "chunks": { "app.js": { "type": "total" } },
+                "merged": [{
+                    "type": "EcmascriptMergedUpdate",
+                    "chunks": { "app.js": { "type": "added" } },
+                }],
+            })
+        );
+    }
 }

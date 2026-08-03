@@ -2672,7 +2672,9 @@ impl Project {
                     return Ok(Update::Total(TotalUpdate { to: to_ref }).cell());
                 }
                 Update::Partial(PartialUpdate { instruction, .. }) => {
-                    builder.add_instruction(instruction);
+                    if !builder.add_instruction(instruction) {
+                        return Ok(Update::Total(TotalUpdate { to: to_ref }).cell());
+                    }
                 }
             }
         }
