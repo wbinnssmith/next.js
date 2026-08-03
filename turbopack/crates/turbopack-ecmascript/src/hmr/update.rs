@@ -1,11 +1,9 @@
-use std::sync::Arc;
-
 use anyhow::Result;
 use turbo_tasks::{FxIndexMap, ReadRef, ResolvedVc, TryJoinIterExt, Vc};
 use turbopack_core::{
     chunk::ModuleId,
     code_builder::Code,
-    version::{PartialUpdate, TotalUpdate, Update, Version},
+    version::{PartialUpdate, TotalUpdate, Update, UpdateInstructionValue, Version},
 };
 
 use crate::{
@@ -288,7 +286,7 @@ pub async fn update_ecmascript_merged_chunk(
             to: Vc::upcast::<Box<dyn Version>>(to_merged_version)
                 .into_trait_ref()
                 .await?,
-            instruction: Arc::new(serde_json::to_value(&merged_update)?),
+            instruction: UpdateInstructionValue::new(serde_json::to_value(&merged_update)?),
         })
     })
 }

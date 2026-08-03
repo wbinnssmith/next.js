@@ -1,6 +1,8 @@
-use std::sync::Arc;
+use std::{any::Any, fmt::Debug, sync::Arc};
 
 use anyhow::{Context, Result, bail};
+use serde::Serialize;
+use turbo_dyn_eq_hash::{impl_eq_for_dyn, impl_partial_eq_for_dyn};
 use turbo_rcstr::RcStr;
 use turbo_tasks::{
     NonLocalValue, OperationValue, ReadRef, ResolvedVc, State, TraitRef, Vc,
@@ -213,8 +215,110 @@ pub struct PartialUpdate {
     pub to: TraitRef<Box<dyn Version>>,
     /// The instructions to be passed to a remote system in order to update the
     /// versioned object.
-    #[turbo_tasks(trace_ignore)]
-    pub instruction: Arc<serde_json::Value>,
+    pub instruction: UpdateInstructionValue,
+}
+
+/// A protocol-specific update instruction whose concrete type is erased at the
+/// generic [`VersionedContent`] boundary.
+pub trait UpdateInstruction:
+    erased_serde::Serialize
+    + turbo_dyn_eq_hash::DynEq
+    + Debug
+    + Send
+    + Sync
+    + NonLocalValue
+    + TraceRawVcs
+    + 'static
+{
+    fn as_any(&self) -> &dyn Any;
+}
+
+impl<T> UpdateInstruction for T
+where
+    T: Serialize + Eq + Debug + Send + Sync + NonLocalValue + TraceRawVcs + 'static,
+{
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+}
+
+erased_serde::serialize_trait_object!(UpdateInstruction);
+impl_partial_eq_for_dyn!(dyn UpdateInstruction);
+impl_eq_for_dyn!(dyn UpdateInstruction);
+
+#[derive(Clone, Debug, Eq, Serialize, ValueDebugFormat)]
+#[serde(transparent)]
+pub struct UpdateInstructionValue(Arc<dyn UpdateInstruction>);
+
+impl PartialEq for UpdateInstructionValue {
+    fn eq(&self, other: &Self) -> bool {
+        self.0.as_ref() == other.0.as_ref()
+    }
+}
+
+impl UpdateInstructionValue {
+    pub fn new<T>(instruction: T) -> Self
+    where
+        T: Serialize + Eq + Debug + Send + Sync + NonLocalValue + TraceRawVcs + 'static,
+    {
+        Self(Arc::new(instruction))
+    }
+
+    pub fn downcast_ref<T: 'static>(&self) -> Option<&T> {
+        UpdateInstruction::as_any(self.0.as_ref()).downcast_ref()
+    }
+}
+
+impl TraceRawVcs for UpdateInstructionValue {
+    fn trace_raw_vcs(&self, trace_context: &mut turbo_tasks::trace::TraceRawVcsContext) {
+        self.0.trace_raw_vcs(trace_context);
+    }
+}
+
+unsafe impl NonLocalValue for UpdateInstructionValue {}
+
+#[cfg(test)]
+mod update_instruction_tests {
+    use serde::Serialize;
+
+    use super::UpdateInstructionValue;
+
+    #[derive(Debug, PartialEq, Eq, Serialize)]
+    struct TestInstruction {
+        value: u32,
+    }
+
+    unsafe impl turbo_tasks::NonLocalValue for TestInstruction {}
+
+    impl turbo_tasks::trace::TraceRawVcs for TestInstruction {
+        fn trace_raw_vcs(&self, _trace_context: &mut turbo_tasks::trace::TraceRawVcsContext) {}
+    }
+
+    #[test]
+    fn serializes_without_an_extra_wrapper() {
+        let instruction = UpdateInstructionValue::new(TestInstruction { value: 42 });
+
+        assert_eq!(
+            serde_json::to_value(&instruction).unwrap(),
+            serde_json::json!({ "value": 42 })
+        );
+    }
+
+    #[test]
+    fn compares_and_downcasts_by_concrete_type() {
+        let instruction = UpdateInstructionValue::new(TestInstruction { value: 42 });
+
+        assert_eq!(
+            instruction.downcast_ref::<TestInstruction>(),
+            Some(&TestInstruction { value: 42 })
+        );
+        assert!(instruction.downcast_ref::<serde_json::Value>().is_none());
+        assert_eq!(
+            instruction,
+            UpdateInstructionValue::new(TestInstruction { value: 42 })
+        );
+        assert_ne!(instruction, UpdateInstructionValue::new(42_u32));
+    }
 }
 
 /// [`Version`] implementation that hashes a file at a given path and returns

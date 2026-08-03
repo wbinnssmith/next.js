@@ -1,11 +1,11 @@
 use std::sync::Arc;
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use serde::Serialize;
 use turbo_tasks::{FxIndexMap, ResolvedVc, TraitRef, Vc};
 use turbopack_core::version::{
-    MergeableVersionedContent, PartialUpdate, TotalUpdate, Update, Version, VersionedContent,
-    VersionedContentMerger,
+    MergeableVersionedContent, PartialUpdate, TotalUpdate, Update, UpdateInstructionValue, Version,
+    VersionedContent, VersionedContentMerger,
 };
 
 use super::version::ChunkListVersion;
@@ -108,10 +108,14 @@ pub async fn update_chunk_list(
                     chunks.insert(chunk_path.as_ref(), ChunkUpdate::Total);
                 }
                 Update::Partial(partial) => {
+                    let instruction = partial
+                        .instruction
+                        .downcast_ref::<serde_json::Value>()
+                        .context("expected a JSON chunk update instruction")?;
                     chunks.insert(
                         chunk_path.as_ref(),
                         ChunkUpdate::Partial {
-                            instruction: partial.instruction.clone(),
+                            instruction: Arc::new(instruction.clone()),
                         },
                     );
                 }
@@ -147,7 +151,11 @@ pub async fn update_chunk_list(
                     .cell());
                 }
                 Update::Partial(partial) => {
-                    merged.push(partial.instruction.clone());
+                    let instruction = partial
+                        .instruction
+                        .downcast_ref::<serde_json::Value>()
+                        .context("expected a JSON merged update instruction")?;
+                    merged.push(Arc::new(instruction.clone()));
                 }
                 Update::Missing | Update::None => {}
             }
@@ -162,7 +170,7 @@ pub async fn update_chunk_list(
             to: Vc::upcast::<Box<dyn Version>>(to_version)
                 .into_trait_ref()
                 .await?,
-            instruction: Arc::new(serde_json::to_value(&update)?),
+            instruction: UpdateInstructionValue::new(serde_json::to_value(&update)?),
         })
     };
 

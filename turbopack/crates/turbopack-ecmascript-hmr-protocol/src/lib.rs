@@ -1,12 +1,12 @@
 use std::{collections::BTreeMap, fmt::Display, path::PathBuf};
 
 use serde::{Deserialize, Serialize};
-use serde_json::Value;
 use turbo_rcstr::RcStr;
 use turbopack_cli_utils::issue::{LogOptions, format_issue};
 use turbopack_core::{
     issue::{IssueSeverity, IssueStage, PlainIssue, StyledString},
     source_pos::SourcePos,
+    version::UpdateInstructionValue,
 };
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Hash)]
@@ -78,7 +78,7 @@ impl<'a> ClientUpdateInstruction<'a> {
 
     pub fn partial(
         resource: &'a ResourceIdentifier,
-        instruction: &'a Value,
+        instruction: &'a UpdateInstructionValue,
         issues: &'a [Issue<'a>],
     ) -> Self {
         Self::new(
@@ -106,7 +106,9 @@ impl<'a> ClientUpdateInstruction<'a> {
 pub enum ClientUpdateInstructionType<'a> {
     Restart,
     NotFound,
-    Partial { instruction: &'a Value },
+    Partial {
+        instruction: &'a UpdateInstructionValue,
+    },
     Issues,
 }
 
@@ -185,5 +187,47 @@ impl<'a> From<&'a PlainIssue> for Issue<'a> {
                 },
             ),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use serde_json::json;
+    use turbo_rcstr::rcstr;
+    use turbopack_core::version::UpdateInstructionValue;
+
+    use super::{ClientUpdateInstruction, ResourceIdentifier};
+
+    #[test]
+    fn partial_instruction_wire_format_is_unchanged() {
+        let resource = ResourceIdentifier {
+            path: rcstr!("server/app.js"),
+            headers: None,
+        };
+        let instruction = UpdateInstructionValue::new(json!({
+            "type": "ecmascriptMerged",
+            "chunks": {},
+        }));
+
+        assert_eq!(
+            serde_json::to_value(ClientUpdateInstruction::partial(
+                &resource,
+                &instruction,
+                &[],
+            ))
+            .unwrap(),
+            json!({
+                "resource": {
+                    "path": "server/app.js",
+                    "headers": null,
+                },
+                "type": "partial",
+                "instruction": {
+                    "type": "ecmascriptMerged",
+                    "chunks": {},
+                },
+                "issues": [],
+            })
+        );
     }
 }

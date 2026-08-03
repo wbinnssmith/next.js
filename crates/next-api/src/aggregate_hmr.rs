@@ -1,13 +1,13 @@
-use std::sync::Arc;
-
-use anyhow::Result;
+use anyhow::{Context, Result, bail};
 use rustc_hash::FxHashMap;
 use turbo_rcstr::RcStr;
 use turbo_tasks::{FxIndexMap, FxIndexSet, ReadRef, ResolvedVc, TraitRef, TryJoinIterExt, Vc};
 use turbo_tasks_fs::FileSystemPath;
 use turbo_tasks_hash::{Xxh3Hash64Hasher, encode_base64};
 use turbopack_browser::ecmascript::list::content::EcmascriptDevChunkListContent;
-use turbopack_core::version::{PartialUpdate, Update, Version, VersionState, VersionedContent};
+use turbopack_core::version::{
+    PartialUpdate, Update, UpdateInstructionValue, Version, VersionState, VersionedContent,
+};
 use turbopack_nodejs::ecmascript::node::entry::chunk_list_content::EcmascriptBuildNodeChunkListContent;
 
 use crate::versioned_content_map::VersionedContentMap;
@@ -101,18 +101,27 @@ pub struct ChunkListUpdateBuilder {
 }
 
 impl ChunkListUpdateBuilder {
-    pub fn add_instruction(&mut self, instruction: &serde_json::Value) {
-        let Some(obj) = instruction.as_object() else {
-            return;
-        };
+    pub fn add_instruction(&mut self, instruction: &UpdateInstructionValue) -> Result<()> {
+        let instruction = instruction
+            .downcast_ref::<serde_json::Value>()
+            .context("expected a JSON HMR update instruction")?;
+        let obj = instruction
+            .as_object()
+            .context("expected an HMR update instruction object")?;
         match obj.get("type").and_then(|v| v.as_str()) {
             Some("ChunkListUpdate") => {
-                if let Some(chunks) = obj.get("chunks").and_then(|v| v.as_object()) {
+                if let Some(chunks) = obj.get("chunks") {
+                    let chunks = chunks
+                        .as_object()
+                        .context("expected ChunkListUpdate chunks to be an object")?;
                     for (k, v) in chunks {
                         self.chunks.insert(k.clone(), v.clone());
                     }
                 }
-                if let Some(merged) = obj.get("merged").and_then(|v| v.as_array()) {
+                if let Some(merged) = obj.get("merged") {
+                    let merged = merged
+                        .as_array()
+                        .context("expected ChunkListUpdate merged to be an array")?;
                     for update in merged {
                         self.push_merged(update);
                     }
@@ -121,10 +130,10 @@ impl ChunkListUpdateBuilder {
             Some("EcmascriptMergedUpdate") => {
                 self.push_merged(instruction);
             }
-            // Unknown instruction shapes are ignored; the caller already
-            // escalates `Total`/`Missing` updates to a full restart.
-            _ => {}
+            Some(instruction_type) => bail!("unexpected HMR update instruction {instruction_type}"),
+            None => bail!("HMR update instruction is missing its type"),
         }
+        Ok(())
     }
 
     fn push_merged(&mut self, update: &serde_json::Value) {
@@ -155,7 +164,7 @@ impl ChunkListUpdateBuilder {
         }
         Update::Partial(PartialUpdate {
             to,
-            instruction: Arc::new(serde_json::Value::Object(instruction)),
+            instruction: UpdateInstructionValue::new(serde_json::Value::Object(instruction)),
         })
     }
 }
